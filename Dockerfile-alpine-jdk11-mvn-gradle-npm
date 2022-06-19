@@ -1,0 +1,125 @@
+FROM alpine:latest
+
+# Download jdk binary from temurin github (in future add sha checksum verification)
+# Use jlink and we can use it remove more default modules and reduce image size
+
+# see https://www.apache.org/dist/tomcat/tomcat-$TOMCAT_MAJOR/KEYS
+# see also "update.sh" (https://github.com/docker-library/tomcat/blob/master/update.sh)
+# ENV GPG_KEYS 05AB33110949707C93A279E3D3EFE6B686867BA6 07E48665A34DCAFAE522E5E6266191C37C037D42 47309207D818FFD8DCD3F83F1931D684307A10A5 541FBE7D8F78B25E055DDEE13C370389288584E7 61B832AC2F1C5A90F0F9B00A1C506407564C17A3 79F7026C690BAA50B92CD8B66A3AD3F4F22C4FED 9BA44C2621385CB966EBA586F72C284D731FABEE A27677289986DB50844682F8ACB77FC2E86E29AC A9C5DF4D22E99998D9875A5110C01C5A2F6059E7 DCFD35E0BF8CA7344752DE8B6FB21E8933C60243 F3A04C595DB5B6A5F1ECA43E3B7BBB100D811BBE F7DA48BB64BCB84ECBA7EE6935CD23C10D498E23
+
+
+ENV JDK_MAJOR 11
+ENV JDK_VERSION 11_15
+ENV JDK_DOWNLOAD_URL https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.15%2B10/OpenJDK11U-jdk_x64_alpine-linux_hotspot_11.0.15_10.tar.gz
+ENV JDK_SHA512_URL   https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.15%2B10/OpenJDK11U-jdk_x64_alpine-linux_hotspot_11.0.15_10.tar.gz.sha256.txt
+
+
+# Download JDK
+RUN set -eux;\
+    mkdir -p target/alpine-linux/x64/hotspot/ \
+    && wget "$JDK_DOWNLOAD_URL" -qO target/alpine-linux/x64/hotspot/OpenJDK11U-jdk_x64_alpine-linux_hotspot_11.0.15_10.tar.gz\
+#    && wget -qO- "$JDK_SHA512_URL" | sha512sum -c -\
+    && gunzip target/alpine-linux/x64/hotspot/OpenJDK11U-jdk_x64_alpine-linux_hotspot_11.0.15_10.tar.gz\
+    && tar -xf target/alpine-linux/x64/hotspot/OpenJDK11U-jdk_x64_alpine-linux_hotspot_11.0.15_10.tar --strip-components=1                          
+
+ENV OS_RELEASE="Alpine Linux v3.16"
+
+# Installed main dependencies:
+#  ca-certificates-bundle-20211220-r0 x86_64: for certificate management to support SSL
+#  openjdk11-jre: OpenJDK built by Timo Teräs <timo.teras@iki.fi> from https://icedtea.classpath.org/
+#                               https://git.alpinelinux.org/aports/commit/?id=f10a27abc4a038853c5b0f74655a1ca75356c93a
+#  fontconfig-2.14.0-r0 x86_64 : For supporting UI/ Fonts for reporting purposes
+#  freetype-2.12.1-r0 x86_64: To support freetype fonts
+#  Tomcat: Java Runtime Container
+
+# https://adoptopenjdk.net/installation.html#x64_linux-jre
+# Set JRE_HOME not JAVA_HOME as we don't intend to run tomcat in debug mode
+
+ENV JAVA_VERSION=11.0.15+10-alpine-r0
+
+RUN set -eux;\
+    apk update \
+    && apk upgrade \
+    # Now Add Support for cacerts
+    # https://hackernoon.com/alpine-docker-image-with-secured-communication-ssl-tls-go-restful-api-128eb6b54f1f
+    && apk add --no-cache ca-certificates\
+
+    # Now Add Support for UI/Font configurations
+    # java.lang.UnsatisfiedLinkError: /usr/local/openjdk-11/lib/libfontmanager.so: libfreetype.so.6: cannot open shared object file: No such file or directory
+    # java.lang.NoClassDefFoundError: Could not initialize class sun.awt.X11FontManager
+    # https://github.com/docker-library/openjdk/pull/235#issuecomment-424466077
+     \fontconfig freetype\
+
+    && rm -rf /var/cache/apk/*
+	
+RUN apk add --update curl && \
+    apk add --update iputils && \
+    apk add --update netcat-openbsd && \
+	apk add --update tzdata && \
+	#apk add --update gradle && \
+	apk add --update npm && \
+    rm -rf /var/cache/apk/* && \
+
+	#gradle --version && \
+	curl --version && \
+        ping -c4 localhost && \
+        nc -h
+
+# Downloading and installing Maven
+ARG MAVEN_VERSION=3.8.6
+ARG USER_HOME_DIR="/root"
+ARG BASE_URL=https://apache.osuosl.org/maven/maven-3/${MAVEN_VERSION}/binaries
+
+
+RUN mkdir -p /usr/share/maven /usr/share/maven/ref \
+  && echo "Downlaoding maven" \
+  && curl -fsSL -o /tmp/apache-maven.tar.gz ${BASE_URL}/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
+  && echo "Unziping maven" \
+  && tar -xzf /tmp/apache-maven.tar.gz -C /usr/share/maven --strip-components=1 \
+  \
+  && echo "Cleaning and setting links" \
+  && rm -f /tmp/apache-maven.tar.gz \
+  && ln -s /usr/share/maven/bin/mvn /usr/bin/mvn \
+  && mvn --version 
+
+ENV MAVEN_VERSION=3.8.6
+ENV MAVEN_HOME=/usr/bin/mvn
+ENV MAVEN_CONFIG="$USER_HOME_DIR/.m2"
+
+
+#Downloading and installing gradle
+ARG GRADLE_VERSION=7.4.2
+
+# 2- Define the URL where gradle can be downloaded from
+ARG GRADLE_BASE_URL=https://services.gradle.org/distributions
+
+# 4- Create the directories, download gradle, validate the download, install it, remove downloaded file and set links
+RUN mkdir -p /usr/share/gradle /usr/share/gradle/ref \
+  && echo "Downlaoding gradle hash" \
+  && curl -fsSL -o /tmp/gradle.zip ${GRADLE_BASE_URL}/gradle-${GRADLE_VERSION}-bin.zip \
+  && echo "Unziping gradle" \
+  && unzip -d /usr/share/gradle /tmp/gradle.zip \
+   \
+  && echo "Cleaning and setting links" \
+  && rm -f /tmp/gradle.zip \
+  && ln -s /usr/share/gradle/gradle-${GRADLE_VERSION} /usr/bin/gradle
+
+ENV GRADLE_VERSION=7.4.2
+ENV GRADLE_HOME=/usr/bin/gradle
+ENV GRADLE_USER_HOME=/cache
+
+ENV PATH=$GRADLE_HOME/bin:$PATH
+ENV PATH=$MAVEN_HOME/bin:$PATH	
+
+# COPY ./org-cacert-bundle.crt /usr/local/share/ca-certificates/mycert.crt
+# COPY --from stage-0 /usr/local/share/ca-certificates /usr/local/share/ca-certificates
+RUN set -eux;\
+    chmod 755 /usr/local/share/ca-certificates\
+    && update-ca-certificates\
+    # Load Organisational fonts
+    && mkdir -p /usr/share/fonts/default/TrueType
+# COPY --from stage-0 /tmp/custom-fonts/ /usr/share/fonts/default/TrueType
+
+VOLUME $GRADLE_USER_HOME
+
+CMD [""]
